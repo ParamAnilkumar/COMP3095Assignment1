@@ -1,0 +1,220 @@
+#--------------------------------------
+# 1. docker-compose -p microservice-comp3095-assigment-booking -f docker-compose.yml up -d
+#   - this command will start the container in detached mode (-d) without rebuilding the image (if they exist)
+# 2. docker-compose -p microservice-comp3095-ecommerce -f docker-compose.yml up -d --build
+#   - this command forces the rebuild of images, even if they already exist, before starting them.
+#--------------------------------------------
+
+services:
+  pgadmin:
+    image: dpage/pgadmin4
+    ports:
+      - "8888:80"
+    container_name: pgadmin-assignment
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=user@domain.ca
+      - PGADMIN_DEFAULT_PASSWORD=password
+    networks:
+      - spring
+
+  postgres-room:
+    image: postgres
+    ports:
+      - "5433:5432"
+    container_name: postgres-room
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres-room-data:/var/lib/postgresql/data
+      - ./init/room/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - spring
+
+  room-service:
+    image: room-service
+    build:
+      context: ./room-service
+      dockerfile: ./Dockerfile
+    ports:
+      - "8086:8086"
+    container_name: room-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - postgres-room
+    networks:
+      - spring
+
+
+  postgres-user:
+    image: postgres
+    ports:
+      - "5435:5432"
+    container_name: postgres-user
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres-user-data:/var/lib/postgresql/data
+      - ./init/User/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - spring
+
+  user-service:
+    image: user-service
+    build:
+      context: ./UserService
+      dockerfile: ./Dockerfile
+    ports:
+      - "8087:8087"
+    container_name: user-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - postgres-user
+    networks:
+      - spring
+
+
+  mongodb-booking:
+    image: mongo:latest
+    container_name: mongodb-booking
+    ports:
+      - "27017:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    volumes:
+      - mongodb-booking-data:/data/db
+      - ./init/booking/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js
+    networks:
+      - spring
+
+  mongo-express-booking:
+    image: mongo-express
+    ports:
+      - "8081:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=password
+      - ME_CONFIG_MONGODB_SERVER=mongodb-booking
+      - ME_CONFIG_MONGODB_URL= mongodb://admin:password@mongodb-booking:27017/
+    depends_on:
+      - mongodb-booking
+    container_name: mongo-express-booking
+    networks:
+      - spring
+
+  booking-service:
+    image: booking-service
+    build:
+      context: ./booking-service
+      dockerfile: ./Dockerfile
+    ports:
+      - "8088:8088"
+    container_name: booking-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - mongodb-booking
+    networks:
+      - spring
+
+
+
+  mongodb-event:
+    image: mongo:latest
+    container_name: mongodb-event
+    ports:
+      - "27018:27017"
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=password
+    volumes:
+      - mongodb-event-data:/data/db
+      - ./init/event/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js
+    networks:
+      - spring
+
+
+  mongo-express-event:
+    image: mongo-express
+    ports:
+      - "8082:8081"
+    environment:
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=admin
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=password
+      - ME_CONFIG_MONGODB_SERVER=mongodb-event
+    depends_on:
+      - mongodb-event
+    container_name: mongo-express-event
+    networks:
+      - spring
+
+
+  event-service:
+    image: event-service
+    build:
+      context: ./event-service
+      dockerfile: ./Dockerfile
+    ports:
+      - "8089:8089"
+    container_name: event-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - mongodb-event
+    networks:
+      - spring
+
+  postgres-approve:
+    image: postgres
+    ports:
+      - "5434:5432"
+    container_name: postgres-approve
+    environment:
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+    volumes:
+      - postgres-approval-data:/var/lib/postgresql/data
+      - ./init/Approval/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - spring
+
+
+  approval-service:
+    image: approval-service
+    build:
+      context: ./approval-service
+      dockerfile: ./Dockerfile
+    ports:
+      - "8090:8090"
+    container_name: approval-service
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+    depends_on:
+      - postgres-approve
+    networks:
+      - spring
+
+
+
+
+volumes:
+  postgres-room-data:
+    driver: local
+  mongodb-event-data:
+    driver: local
+  mongodb-booking-data:
+    driver: local
+  postgres-approval-data:
+    driver: local
+  postgres-user-data:
+    driver: local
+
+
+
+networks:
+  spring:
+    driver: bridge
