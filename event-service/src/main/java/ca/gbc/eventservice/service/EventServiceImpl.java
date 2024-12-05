@@ -4,69 +4,77 @@ import ca.gbc.eventservice.dto.EventRequest;
 import ca.gbc.eventservice.dto.EventResponse;
 import ca.gbc.eventservice.model.Event;
 import ca.gbc.eventservice.repository.EventRepository;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.http.ResponseEntity;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Objects;
 
 /**
  * @project Assignment1-parent
- * @authorparam on
+ * @author
  **/
-
 @Service
 @Slf4j
 @RequiredArgsConstructor
-public class EventServiceImpl implements EventService{
+public class EventServiceImpl implements EventService {
 
     private final EventRepository eventRepository;
     private final MongoTemplate mongoTemplate;
     private final RestTemplate restTemplate;
+    private final KafkaTemplate<String, String> kafkaTemplate;
 
-    String userServiceUrl="http://user-service:8087/api/users/student/";
-    String bookingServiceUrl = "http://booking-service:8088/api/bookings/exists/";
+    @Value("${service.user-url}")
+    private String userServiceUrl;
+
+    @Value("${service.booking-url}")
+    private String bookingServiceUrl;
+
     @Override
     public String createEvent(EventRequest request) {
-        String bookingUrl = bookingServiceUrl+request.bookingId();
-        Boolean exists = restTemplate.getForObject(bookingUrl, Boolean.class);
-        if(Boolean.TRUE.equals(exists)){
+        String bookingUrl = bookingServiceUrl + request.bookingId();
+        Boolean exists = checkBookingExists(request.bookingId());
 
+        if (Boolean.TRUE.equals(exists)) {
             Event event = mapRequestToEvent(request);
-            boolean student = getUserType(event.getUserId());
-            if(student){
-                if(event.getExpectedAttendees()<=100){
+            boolean isStudent = getUserType(event.getUserId());
+
+            if (isStudent) {
+                if (event.getExpectedAttendees() <= 100) {
                     Event savedEvent = eventRepository.save(event);
-                    log.debug("Event organized for student with event id "+ savedEvent.getId());
-                    return "Event organized for student with event id "+ savedEvent.getId();
+                    log.debug("Event organized for student with event id: {}", savedEvent.getId());
+                    String eventMessage = String.format(" Student Event created: "+savedEvent.getId()+" & userId: "+savedEvent.getUserId()+" & bookingId: "+savedEvent.getBookingId());
+                    kafkaTemplate.send("event-events",eventMessage);
+                    return "Event organized for student with event id: " + savedEvent.getId();
+
+                } else {
+                    log.warn("Students can't book large events. Limit is 100 attendees.");
+                    return "Students can't book large events. Limit is 100 attendees.";
                 }
-                else{
-                    log.warn("Student can't book this big event limit is 100");
-                    return "Student can't book this big event limit is 100";
-                }
+            } else {
+                Event savedEvent = eventRepository.save(event);
+                log.debug("Event organized with id: {}", savedEvent.getId());
+                String eventMessage = String.format("Event created: "+savedEvent.getId()+" & userId: "+savedEvent.getUserId()+" & bookingId: "+savedEvent.getBookingId());
+                kafkaTemplate.send("event-events",eventMessage);
+                return "Event organized with id: " + savedEvent.getId();
             }
-            else{
-            Event savedEvent = eventRepository.save(event);
-            log.debug("Event organized."+ savedEvent.getId());
-            return "Event organized with id "+ savedEvent.getId();
-            }
-        }
-        else{
-            log.warn("Booking not exists.");
-            throw new IllegalStateException("Booking not exists.");
+        } else {
+            log.warn("Booking does not exist.");
+            throw new IllegalStateException("Booking does not exist.");
         }
     }
 
     @Override
     public List<EventResponse> getAllEvents() {
-        log.debug("Returning a list of Events.");
+        log.debug("Returning a list of events.");
         List<Event> events = eventRepository.findAll();
-        if(events.isEmpty()){
+        if (events.isEmpty()) {
             return null;
         }
         return events.stream().map(this::mapToEventResponse).toList();
@@ -74,44 +82,81 @@ public class EventServiceImpl implements EventService{
 
     @Override
     public void deleteEvent(String id) {
-        log.debug("Delete the event with id{}",id);
+        log.debug("Deleting the event with id: {}", id);
         eventRepository.deleteById(id);
     }
 
     @Override
     public void updateEventDate(String id, String date) {
-    Event event = eventRepository.findById(id).orElse(null);
-        assert event != null;
-        event.setEventDate(date);
-    eventRepository.save(event);
+        Event event = eventRepository.findById(id).orElse(null);
+        if (event != null) {
+            event.setEventDate(date);
+            eventRepository.save(event);
+        }
     }
+
     @Override
     public EventResponse getEventById(String id) {
-        log.debug("Getting event by id"+ id);
+        log.debug("Getting event by id: {}", id);
         Event event = eventRepository.findById(id).orElse(null);
-        assert event != null;
-        EventResponse response;
-        response = mapToEventResponse(event);
-        return response;
+        if (event == null) {
+            return null;
+        }
+        return mapToEventResponse(event);
     }
 
-    public void changeApproval(String id,boolean approve){
+    public void changeApproval(String id, boolean approve) {
         Event event = eventRepository.findById(id).orElse(null);
-        assert event != null;
-        event.setApproved(approve);
-        eventRepository.save(event);
+        if (event != null) {
+            event.setApproved(approve);
+            eventRepository.save(event);
+        }
     }
 
-    public boolean getUserType(Long id){
-        String eventUrl = userServiceUrl+id;
-        String isStudent = restTemplate.getForObject(eventUrl,String.class);
+    @CircuitBreaker(name = "bookingServiceCircuitBreaker", fallbackMethod = "fallbackForBookingCheck")
+    public boolean checkBookingExists(String id) {
+        Boolean exists = restTemplate.getForObject(bookingServiceUrl+id, Boolean.class);
+        return Boolean.TRUE.equals(exists);
+    }
+
+    @CircuitBreaker(name = "userServiceCircuitBreaker", fallbackMethod = "fallbackForUserType")
+    public boolean getUserType(Long id) {
+        String userUrl = userServiceUrl + id;
+        String isStudent = restTemplate.getForObject(userUrl, String.class);
         return Objects.equals(isStudent, "true");
     }
 
     private EventResponse mapToEventResponse(Event event) {
-        return new EventResponse(event.getId(),event.getBookingId(),event.getUserId(),event.getEventName(), event.getExpectedAttendees(), event.getEventDate());
+        return new EventResponse(
+                event.getId(),
+                event.getBookingId(),
+                event.getUserId(),
+                event.getEventName(),
+                event.getExpectedAttendees(),
+                event.getEventDate()
+        );
     }
-    private Event mapRequestToEvent(EventRequest request){
-        return new Event(request.id(),request.bookingId(),request.userId(),request.eventName(),request.expectedAttendees(),request.eventDate(), false);
+
+    private Event mapRequestToEvent(EventRequest request) {
+        return new Event(
+                request.id(),
+                request.bookingId(),
+                request.userId(),
+                request.eventName(),
+                request.expectedAttendees(),
+                request.eventDate(),
+                false
+        );
+    }
+
+    // Fallback methods
+    public boolean fallbackForBookingCheck(String bookingUrl, Throwable throwable) {
+        log.error("Booking service is unavailable. Error: {}", throwable.getMessage());
+        return false; // Default fallback behavior: assume booking does not exist.
+    }
+
+    public boolean fallbackForUserType(Long id, Throwable throwable) {
+        log.error("User service is unavailable. Error: {}", throwable.getMessage());
+        return false; // Default fallback behavior: assume user is not a student.
     }
 }

@@ -53,13 +53,13 @@ public class RoomController {
         HttpHeaders headers = new HttpHeaders();
         headers.add("Location" ," /api/room/" + updateRoomId);
 
-        return new ResponseEntity<>(headers,HttpStatus.NO_CONTENT);
+        return new ResponseEntity<>(headers,HttpStatus.OK);
     }
 
     @DeleteMapping("/{roomId}")
-    public ResponseEntity<?> deleteProduct(@PathVariable("roomId") Long roomId){
+    public ResponseEntity<String> deleteProduct(@PathVariable("roomId") Long roomId){
         roomService.deleteRoom(roomId);
-        return new ResponseEntity<>(HttpStatus.NO_CONTENT);
+        return ResponseEntity.ok("Room deleted");
     }
 
     @GetMapping("/available")
@@ -85,9 +85,9 @@ public class RoomController {
 
     @PutMapping("{roomId}/availability")
     @ResponseStatus(HttpStatus.OK)
-    public ResponseEntity<?> updateRoomAvailability(@PathVariable Long roomId,@RequestParam boolean available) {
+    public ResponseEntity<?> updateRoomAvailability(@PathVariable Long roomId,@RequestParam boolean isAvail) {
         try {
-            roomService.updateRoomAvailability(roomId, available);
+            roomService.updateRoomAvailability(roomId, isAvail);
             return ResponseEntity.ok("Room availability updated successfully.");
         } catch (Exception e) {
             return ResponseEntity.status(500).body("Failed to update room availability.");

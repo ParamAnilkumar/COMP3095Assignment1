@@ -6,6 +6,43 @@
 #--------------------------------------------
 
 services:
+  keycloak:
+    container_name: keycloak
+    hostname: keycloak
+    image: quay.io/keycloak/keycloak:24.0.1
+    command: [ "start-dev","--import-realm" ]
+    environment:
+      DB_VENDOR: postgres
+      DB_ADDR: postgres-keycloak
+      DB_DATABASE: keycloak
+      DB_PASSWORD: password
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: password
+      ROOT_LOGLEVEL: DEBUG
+      JBOSS_LOG_MANAGER_ROOT_LOGGER: DEBUG, stdout, FILE
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./realms/:/opt/keycloak/data/import
+    depends_on:
+      - postgres-keycloak
+    networks:
+      - spring
+
+  postgres-keycloak:
+    image: postgres
+    ports:
+      - "5431:5432"
+    container_name: postgres-keycloak
+    environment:
+      - POSTGRES_DB= keycloak
+      - POSTGRES_USER=admin
+      - POSTGRES_PASSWORD=password
+      - PGDATA=/data/postgres
+    volumes:
+      - ./data/postgres/keycloak:/var/lib/postgresql/data
+    networks:
+      - spring
   pgadmin:
     image: dpage/pgadmin4
     ports:
@@ -28,6 +65,22 @@ services:
     volumes:
       - postgres-room-data:/var/lib/postgresql/data
       - ./init/room/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - spring
+
+  api-gateway:
+    image: api-gateway
+    build:
+      context: ./api-gateway
+      dockerfile: ./Dockerfile
+    ports:
+      - "9000:9000"
+    container_name: api-gateway1
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_ISSUER_URI: http://keycloak:8080/realms/spring-microservices-security-realm
+    depends_on:
+      - postgres-keycloak
     networks:
       - spring
 
@@ -195,6 +248,54 @@ services:
       SPRING_PROFILES_ACTIVE: docker
     depends_on:
       - postgres-approve
+    networks:
+      - spring
+
+
+  zookeeper:
+    container_name: zookeeper1
+    hostname: zookeeper
+    image: confluentinc/cp-zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - spring
+
+  # Kafka Broker service for messaging and streaming data between our microservices
+  broker:
+    container_name: broker1
+    image: confluentinc/cp-kafka:7.5.0
+    ports:
+      # External connections (outside the Docker)
+      - "9092:9092"
+      # Internal connections (inside the Docker)
+      - "29092:29092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    depends_on:
+      - zookeeper
+    networks:
+      - spring
+
+  # Kafka UI -service for monitoring kafka topics
+  kafka-ui:
+    container_name: kafka-ui1
+    image: provectuslabs/kafka-ui:latest
+    ports:
+      - "8070:8080"
+    environment:
+      KAFKA_CLUSTERS_NAME: local
+      KAFKA_CLUSTERS_BOOTSTRAPSERVERS: broker:29092
+      DYNAMIC_CONFIG_ENABLED: 'true'
+    depends_on:
+      - broker
     networks:
       - spring
 

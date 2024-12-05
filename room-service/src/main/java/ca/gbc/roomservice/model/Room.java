@@ -28,4 +28,5 @@ public class Room {
 
     @Column(name = "availability")
     private boolean availability;
+
 }
